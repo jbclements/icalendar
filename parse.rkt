@@ -2,7 +2,8 @@
 
 ;; following along with RFC 5545 ...
 
-(require rackunit)
+(require rackunit
+         irregex)
 
 (define in-port (open-input-file "/tmp/basic.ics"))
 
@@ -63,8 +64,31 @@
 (length lines)
 (length unfolded)
 
-(define (parse-line line)
+(define alpha `(or (/ #\a #\z) (/ #\A #\Z)))
+(define digit `(/ #\0 #\9))
+;; note that iana-token subsumes x-name, so distinguishing them
+;; should happen later.
+(define iana-token `(+ (or ,alpha ,digit "-")))
+(define name iana-token)
+(define value-char `(or ,wsp ))
+;; incomplete!
+(define contentline `(: (=> name ,name) ":" (=> value (* value-char)) "\r\n"))
+
+(define match
+  (irregex-match contentline (bytes->string/utf-8 (first unfolded))))
+
+(irregex-match-substring match 'name)
+(irregex-match-substring match 'rest)
+
+
+
+
+
+
+;(irregex-search '(/ #\a #\z) "034abcd")
+
+#;(define (parse-line line)
   (match (bytes->string/utf-8 line)
     [(regexp #px"^([-[:alnum:]]*)(.*)\r\n" (list _ name rest)) (list name rest)]))
 
-(define parsed (map parse-line unfolded))
+#;(define parsed (map parse-line unfolded))
