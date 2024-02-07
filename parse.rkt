@@ -63,26 +63,114 @@
 
 (length lines)
 (length unfolded)
-
+#;(
 (define alpha `(or (/ #\a #\z) (/ #\A #\Z)))
 (define digit `(/ #\0 #\9))
 ;; note that iana-token subsumes x-name, so distinguishing them
 ;; should happen later.
 (define iana-token `(+ (or ,alpha ,digit "-")))
 (define name iana-token)
-(define value-char `(or ,wsp ))
+(define wsp '(" \t"))
+;; the range (or (/ #\u21 #\ud7ff) (/ #\uE000 #\U10FFFF))
+;; appears to me to correspond
+;; to the specification "%x21-7E / NON-US-ASCII"
+;; where NON-US-ASCII is defined as
+;; UTF8-2 / UTF8-3 / UTF8-4
+;; I have investigated this as much as I choose to at this moment....
+;; I'm also slightly concerned about the possibility that irregex
+;; is actually constructing a regex that includes each character
+;; by name...
+(define value-char `(or ,wsp (/ #\u21 #\ud7ff) (/ #\uE000 #\U10FFFF)))
+
+;; param-name is the same as name...
+
+;SAFE-CHAR     = WSP / %x21 / %x23-2B / %x2D-39 / %x3C-7E
+(define safe-char `(or ,wsp #\u21 (/ #\u23 #\u2b) (/ #\u2d #\u39) (/ #\u3c #\u7e)))
+(define paramtext `(* ,safe-char))
+;QSAFE-CHAR    = WSP / %x21 / %x23-7E / NON-US-ASCII
+; Any character except CONTROL and DQUOTE
+(define qsafe-char `(or ,wsp #\u21 (/ #\u23 #\u7e #\ud7ff) (/ #\uE000 #\U10FFFF)))
+;quoted-string = DQUOTE *QSAFE-CHAR DQUOTE
+(define quoted-string `("\"" (* ,qsafe-char) "\""))
+(define param-value `(or ,paramtext ,quoted-string))
+(define param `(: ,name "=" ,param-value (* (: "," ,param-value))))
+
 ;; incomplete!
-(define contentline `(: (=> name ,name) ":" (=> value (* value-char)) "\r\n"))
+(define contentline
+  `(: (=> name ,name)
+      (* ";" ,param)
+      ":" (=> value (* ,value-char)) "\r\n"))
+)
+;; sadly, irregex seems way too slow.
 
-(define match
-  (irregex-match contentline (bytes->string/utf-8 (first unfolded))))
-
-(irregex-match-substring match 'name)
-(irregex-match-substring match 'rest)
+;okay, doing it as a big fat string construction, ugh...
 
 
+#;(define parsed
+  (time
+  (for/list ([l (in-list (take unfolded 2000))])
+    (define match
+      (irregex-match contentline (bytes->string/utf-8 l)))
+
+    (when (not match)
+      (error 'parsing "couldn't parse this one: ~e" l))
+    (irregex-match-substring match 'name)
+    (irregex-match-substring match 'value))))
+
+(define iana-token "[-[:alnum:]]*")
+(define value-char "[ \t\u21-\ud7ff\ue000-\U10ffff]")
+;SAFE-CHAR     = WSP / %x21 / %x23-2B / %x2D-39 / %x3C-7E
+(define safe-char "[- \t\u21\u23-\u2b\u2e-\u39\u3c-\u7e]")
+(define paramtext (~a safe-char "*"))
+;QSAFE-CHAR    = WSP / %x21 / %x23-7E / NON-US-ASCII
+; Any character except CONTROL and DQUOTE
+(define qsafe-char "[ \t\u21\u23-\ud7ff\ue000-\U10fff]")
+;quoted-string = DQUOTE *QSAFE-CHAR DQUOTE
+(define quoted-string (~a "\""qsafe-char"*\""))
+(define param-value (~a "("paramtext"|"quoted-string")"))
+
+(define contentline (~a "("iana-token")" ;;#1
+                        ;; ouch... the limitations of pregexps (no nested
+                        ;; match sequences) mean that we need to parse this
+                        ;; in multiple steps, sigh.
+                        "((;"iana-token"="param-value"(,"param-value")*)*)" ;; #2, #3
+                        ":("value-char"*)\r\n" ;; #4
+                        ))
+  
+(regexp-match (pregexp contentline)
+              "BEGIN:VCALENDAR\r\n")
+
+(define the-regexp (pregexp contentline))
+
+(define (parse-line l)
+  (define m
+    (regexp-match (pregexp contentline) (bytes->string/utf-8 l)))
+  (match m
+    [#f (error 'parsing "couldn't parse this one: ~e" l)]
+    [(list _ name params _ _ _ _ value) (list name params value)]))
+
+(parse-line #"ABC;A=3,\"4\",5;B=4:euaouth\r\n")
+
+(define parsed
+  (time
+   (for/list ([l (in-list unfolded)])
+     (parse-line l)
+
+     )))
 
 
+#;(define parsed2)
+
+(regexp-match #rx"[\u21-\ud7ff]" "@")
+
+
+
+
+#;(check-equal? (irregex-match-data?
+               (irregex-match
+                `(* ,value-char)
+                "aeu23<234<@u33onth.  ah\t~\"" ))
+              #t)
 
 
 ;(irregex-search '(/ #\a #\z) "034abcd")
