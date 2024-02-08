@@ -3,7 +3,8 @@
 ;; following along with RFC 5545 ...
 
 (require rackunit
-         irregex)
+         #;irregex
+         )
 
 (define in-port (open-input-file "/tmp/basic.ics"))
 
@@ -129,12 +130,14 @@
 (define quoted-string (~a "\""qsafe-char"*\""))
 (define param-value (~a "("paramtext"|"quoted-string")"))
 
-(define contentline (~a "("iana-token")" ;;#1
+(define param (~a "(;("iana-token")=("param-value")((,"param-value")*))"))
+
+(define contentline (~a "^("iana-token")" ;;#1
                         ;; ouch... the limitations of pregexps (no nested
                         ;; match sequences) mean that we need to parse this
                         ;; in multiple steps, sigh.
-                        "((;"iana-token"="param-value"(,"param-value")*)*)" ;; #2, #3
-                        ":("value-char"*)\r\n" ;; #4
+                        "("param"*)" ;; #2, #3
+                        ":("value-char"*)\r\n$" ;; #4
                         ))
   
 (regexp-match (pregexp contentline)
@@ -142,14 +145,47 @@
 
 (define the-regexp (pregexp contentline))
 
+(define param-regexp (pregexp (~a "^" param "("param"*)$")))
+
+(define othervals-regexp (pregexp (~a "^,"param-value"((,"param-value")*)$")))
+
+(struct parsed-line (name params value) #:transparent)
+
+
+
+;; parse a line
 (define (parse-line l)
   (define m
     (regexp-match (pregexp contentline) (bytes->string/utf-8 l)))
   (match m
     [#f (error 'parsing "couldn't parse this one: ~e" l)]
-    [(list _ name params _ _ _ _ value) (list name params value)]))
+    [(list _ name params _ _ _ _ _ _ _ value)
+     (parsed-line name (parse-params params) value)]))
 
-(parse-line #"ABC;A=3,\"4\",5;B=4:euaouth\r\n")
+;; parse the remaining values
+(define (parse-param-othervals othervals)
+  (match othervals
+    ["" '()]
+    [other
+     (match (regexp-match othervals-regexp othervals)
+       [(list _ firstval remainder _ _)
+        (cons firstval (parse-param-othervals remainder))])]))
+
+;; parse the param list
+(define (parse-params params)
+  (match params
+    ["" '()]
+    [other
+     (match (regexp-match param-regexp params)
+       [(list _ _ p1-name p1-val1 _ p1-othervals _ _ rest _ _ _ _ _ _ _)
+        (cons (list p1-name (cons p1-val1 (parse-param-othervals p1-othervals)))
+              (parse-params rest))]
+       [#f (error 'parse-params "no match for params: ~e" params)])]))
+
+
+
+(parse-line #"ABC;A=3,\"4\",5,\"6\";B=4:euaouth\r\n")
+(parse-line #"ABC;A=3,\"4\",5;B=4;c=5,6:euaouth\r\n")
 
 (define parsed
   (time
