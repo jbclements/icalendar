@@ -1,16 +1,16 @@
-#lang racket
+#lang typed/racket
 
 ;; following along with RFC 5545 ...
 
-(require rackunit
+(require typed/rackunit
          #;irregex
          )
 
 (define in-port (open-input-file "/tmp/basic.ics"))
 
 ;; read all \r\n-terminated lines
-(define lines
-  (let loop ([lines '()])
+(define lines : (Listof Bytes)
+  (let loop  ([lines : (Listof Bytes) '()])
     (define try-match
       (regexp-match #px#"^[^\r]*\r\n" in-port))
     (cond [try-match
@@ -19,9 +19,9 @@
            (reverse lines)])))
 
 ;; join using "unfolding"
-(define (unfold lines)
+(define (unfold [lines : (Listof Bytes)]) : (Listof Bytes)
   (let loop ([lines lines]
-             [accum '()])
+             [accum : (Listof Bytes) '()])
     (define (advance) (loop (rest lines) (cons (first lines) accum)))
     (cond [(empty? lines) (reverse accum)]
           [(empty? (rest lines)) (advance)]
@@ -58,7 +58,7 @@
 
 
 
-(count (λ (l) (regexp-match? #px#"^[ \t]" l)) lines)
+(count (λ ([l : Bytes]) (regexp-match? #px#"^[ \t]" l)) lines)
 
 (define unfolded (unfold lines))
 
@@ -149,37 +149,47 @@
 
 (define othervals-regexp (pregexp (~a "^,"param-value"((,"param-value")*)$")))
 
-(struct parsed-line (name params value) #:transparent)
+(struct Parsed-Line ([name : String]
+                     [params : (Listof (List String (Listof String)))]
+                     [value : String]) #:transparent)
 
 
 
 ;; parse a line
-(define (parse-line l)
+(define (parse-line [l : Bytes]) : Parsed-Line
   (define m
-    (regexp-match (pregexp contentline) (bytes->string/utf-8 l)))
+    (regexp-match the-regexp (bytes->string/utf-8 l)))
   (match m
     [#f (error 'parsing "couldn't parse this one: ~e" l)]
     [(list _ name params _ _ _ _ _ _ _ value)
-     (parsed-line name (parse-params params) value)]))
+     ;; assert should succeed by def'n of regexp
+     (Parsed-Line (assert name string?)
+                  (parse-params (assert params string?))
+                  (assert value string?))]))
 
 ;; parse the remaining values
-(define (parse-param-othervals othervals)
+(define (parse-param-othervals [othervals : String]) : (Listof String)
   (match othervals
     ["" '()]
     [other
      (match (regexp-match othervals-regexp othervals)
        [(list _ firstval remainder _ _)
-        (cons firstval (parse-param-othervals remainder))])]))
+        (cons (assert firstval string?)
+              (parse-param-othervals (assert remainder string?)))])]))
 
 ;; parse the param list
-(define (parse-params params)
+(define (parse-params [params : String])
+  : (Listof (List String (Listof String)))
   (match params
     ["" '()]
     [other
      (match (regexp-match param-regexp params)
        [(list _ _ p1-name p1-val1 _ p1-othervals _ _ rest _ _ _ _ _ _ _)
-        (cons (list p1-name (cons p1-val1 (parse-param-othervals p1-othervals)))
-              (parse-params rest))]
+        (cons (list (assert p1-name string?)
+                    (cons (assert p1-val1 string?)
+                          (parse-param-othervals
+                           (assert p1-othervals string?))))
+              (parse-params (assert rest string?)))]
        [#f (error 'parse-params "no match for params: ~e" params)])]))
 
 
@@ -187,12 +197,9 @@
 (parse-line #"ABC;A=3,\"4\",5,\"6\";B=4:euaouth\r\n")
 (parse-line #"ABC;A=3,\"4\",5;B=4;c=5,6:euaouth\r\n")
 
-(define parsed
+(define parsed : (Listof Parsed-Line)
   (time
-   (for/list ([l (in-list unfolded)])
-     (parse-line l)
-
-     )))
+   (map parse-line unfolded)))
 
 
 #;(define parsed2)
