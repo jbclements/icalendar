@@ -197,6 +197,10 @@
 (parse-line #"ABC;A=3,\"4\",5,\"6\";B=4:euaouth\r\n")
 (parse-line #"ABC;A=3,\"4\",5;B=4;c=5,6:euaouth\r\n")
 
+#;(define-type checked-parameter
+  (U (List )))
+#;(define (check-parameter [param : (List String (Listof String))]) : )
+
 (define parsed : (Listof Parsed-Line)
   (time
    (map parse-line unfolded)))
